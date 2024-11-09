@@ -3,6 +3,7 @@ import sys
 import json
 
 from glob import glob
+from subprocess import Popen
 from typing import TypedDict
 from .config import CONFIG, CONFIG_PATH
 
@@ -24,14 +25,6 @@ def listExecutables(path: str, platform=sys.platform):
 
     return f
 
-def add_alias(name: str, path: str):
-    CONFIG["aliases"][name] = path
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(CONFIG, f)
-
-def get_alias(name: str) -> str:
-    return CONFIG["aliases"][name]
-
 class ModInfo(TypedDict):
     name: str
     description: str
@@ -49,6 +42,7 @@ class Mod:
             self.__config: ModInfo = json.load(f)
 
         self.name = self.__config["name"]
+        self.dir_name = os.path.split(path)[1]
         self.description = self.__config["description"]
 
 class Fnf:
@@ -59,23 +53,23 @@ class Fnf:
         else:
             raise FileNotFoundError()
 
-        self.mods_dir = os.path.join(self.path, "mods")
+        self.mod_dir = os.path.join(self.path, "mods")
 
     def get_active_mod(self) -> Mod:
-        return Mod(self.mods_dir)
+        return Mod(self.mod_dir)
 
     def set_active_mod(self, mod: str | Mod):
         """
         Parameters:
             name (str): The folder name of the mod, the mod should be in the root directory
         """
-        name = mod.name if isinstance(mod, Mod) else mod
+        mod_dir = mod.dir_name if isinstance(mod, Mod) else mod
 
-        if os.path.exists(self.mods_dir):
+        if os.path.exists(self.mod_dir):
             _mod = self.get_active_mod()
-            os.rename(self.mods_dir, _mod.name.replace(" ", "_"))
+            os.rename(self.mod_dir, os.path.join(self.path, _mod.name.replace(" ", "_")))
 
-        os.rename(os.path.join(self.path, name), "mods")
+        os.rename(os.path.join(self.path, mod_dir), os.path.join(self.path, "mods"))
 
     def get_mods(self) -> list[Mod]:
         packs_json = glob(os.path.join(self.path, "**", "pack.json"))
@@ -85,24 +79,39 @@ class Fnf:
         return [Mod(os.path.split(pack)[0]) for pack in packs_json]
 
     def run(self):
-        if CONFIG["runner"] == "native":
+        runner = CONFIG.get_runner()
+        if runner == "native":
             e = listExecutables(self.path)
             if len(e) > 1:
                 print("There is more than one executable file in the psychEngine folder")
                 return
             os.system(e[0])
 
-        elif CONFIG["runner"] == "bottles":
+        elif runner == "bottles":
             e = listExecutables(self.path, platform="win32")
 
-            bottle = ""
-            if CONFIG["runnerConfig"]["bottle"] != "":
-                bottle = " -b " + CONFIG["runnerConfig"]["bottle"]
-            os.system(f"flatpak run com.usebottles.bottles" + bottle + f" {e[0]}")
+            bottle = []
+            if CONFIG._config["runnerConfig"]["bottle"] != "":
+                bottle = ["-b",CONFIG._config["runnerConfig"]["bottle"]]
 
-        elif CONFIG["runner"] == "wine":
+            Popen(args=["flatpak", "run", "com.usebottles.bottles", *bottle, e[0]],
+                cwd=self.path,
+                stdout=sys.stdout,
+                stderr=sys.stderr
+            ).communicate()
+
+        elif runner == "wine":
             e = listExecutables(self.path, platform="win32")
 
-            os.system(f"WINEPREFIX={CONFIG['runnerConfig']['winePrefix']} wine {e[0]}")
+            prefix = CONFIG._config['runnerConfig']['winePrefix'].replace("~", os.environ['HOME'])
+            _env = {"WINEPREFIX": prefix}
+            _env.update(os.environ)
+
+            Popen(args=["wine", e[0]],
+                # env=_env,
+                cwd=self.path,
+                stdout=sys.stdout,
+                stderr=sys.stderr
+            ).communicate()
         else:
             print("Invalid runner")
